@@ -1,0 +1,29 @@
+# Archivos de entorno
+.env
+.env.local
+
+# Streamlit local secrets
+.streamlit/secrets.toml
+
+# Archivos temporales
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Entornos virtuales
+venv/
+env/
+ENV/
+
+# Jupyter
+.ipynb_checkpoints
+
+# Datos grandes (opcional)
+*.csv
+*.xlsx
+!datos_pequenos.csv  # si quieres subir alguno específico

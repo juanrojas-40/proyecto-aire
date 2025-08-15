@@ -7,21 +7,66 @@ from datetime import datetime
 import folium
 from folium.plugins import MarkerCluster
 from streamlit_folium import st_folium
-
-# --- 1. CARGA DE VARIABLES DE ENTORNO ---
-from dotenv import load_dotenv
 import os
+from dotenv import load_dotenv
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
-# Cargar variables del archivo .env
-load_dotenv()
+# --- 6. CONEXIÓN CON GOOGLE SHEETS ---
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+from datetime import datetime
 
-# Obtener credenciales (si no existen, se asigna None)
-EMAIL_REMITENTE = os.getenv("EMAIL_REMITENTE")
-EMAIL_APP_PASSWORD = os.getenv("EMAIL_APP_PASSWORD")
+def guardar_suscriptor(email):
+    """
+    Guarda un nuevo suscriptor en Google Sheets.
+    """
+    try:
+        # Configuración de autenticación
+        scope = [
+            "https://spreadsheets.google.com/feeds",
+            "https://www.googleapis.com/auth/drive"
+        ]
+        creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
+        client = gspread.authorize(creds)
 
-# Validación de credenciales
+        # Abre la hoja de cálculo por nombre
+        sheet = client.open("suscriptores_airalert").sheet1  # Asegúrate del nombre
+
+        # Agrega una nueva fila
+        sheet.append_row([
+            email,
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        ])
+        return True
+    except Exception as e:
+        st.error(f"❌ Error al guardar suscriptor: {e}")
+        return False
+    
+
+
+
+    
+# --- 1. CARGA DE CREDENCIALES SEGURAS ---
+# Cargar .env solo si existe (modo desarrollo)
+if os.path.exists(".env"):
+    load_dotenv()
+
+# Función para obtener secretos: primero de Streamlit Cloud, luego de .env
+def get_secret(key):
+    try:
+        return st.secrets[key]
+    except:
+        return os.getenv(key)
+
+# Obtener credenciales
+EMAIL_REMITENTE = get_secret("EMAIL_REMITENTE")
+EMAIL_APP_PASSWORD = get_secret("EMAIL_APP_PASSWORD")
+
+# Validar que se cargaron
 if not EMAIL_REMITENTE or not EMAIL_APP_PASSWORD:
-    st.error("❌ Error de configuración: No se encontraron las credenciales en el archivo .env")
+    st.error("❌ Error de configuración: No se encontraron las credenciales. Revisa .env o secrets.toml")
     st.stop()
 
 # --- 2. GENERACIÓN DE DATOS ALEATORIOS ---
@@ -41,10 +86,6 @@ def generar_datos_aleatorios():
 df = generar_datos_aleatorios()
 
 # --- 3. FUNCIÓN PARA ENVIAR EMAIL DE BIENVENIDA ---
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-
 def enviar_email_bienvenida(destinatario):
     remitente = EMAIL_REMITENTE
     password = EMAIL_APP_PASSWORD
@@ -128,17 +169,37 @@ if submit:
     if not email or "@" not in email or "." not in email:
         st.sidebar.error("Por favor, ingresa un correo válido.")
     else:
-        if enviar_email_bienvenida(email):
-            st.sidebar.success(f"✅ ¡Gracias, {email}! Revisa tu bandeja de entrada.")
+        # 1. Envía correo de bienvenida
+        exito_correo = enviar_email_bienvenida(email)
+        
+        # 2. Guarda en Google Sheets
+        exito_guardado = guardar_suscriptor(email)
+        
+        # 3. Muestra mensaje
+        if exito_guardado:
+            if exito_correo:
+                st.sidebar.success(f"✅ ¡Gracias, {email}! Revisa tu correo.")
+            else:
+                st.sidebar.warning(f"✅ Suscrito. Revisa tu correo pronto.")
         else:
-            st.sidebar.warning(f"✅ Gracias por suscribirte, {email}. Hubo un problema con el correo, pero tu suscripción es válida.")
+            st.sidebar.error("Hubo un problema al guardar tu suscripción.")
 
-# --- 6. GUARDAR SUSCRIPTORES (opcional) ---
-try:
-    suscriptores = pd.read_csv("suscriptores.csv")
-except FileNotFoundError:
-    suscriptores = pd.DataFrame(columns=["email", "fecha"])
 
-nuevo = pd.DataFrame([{"email": email, "fecha": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}])
-suscriptores = pd.concat([suscriptores, nuevo], ignore_index=True)
-suscriptores.to_csv("suscriptores.csv", index=False)
+
+
+
+
+
+
+# --- 6. GUARDAR SUSCRIPTORES (opcional - solo para desarrollo local) ---
+# ⚠️ En Streamlit Cloud, los archivos se borran al reiniciar
+# Para producción, usa Google Sheets, base de datos o API externa
+# Ejemplo comentado:
+# try:
+#     suscriptores = pd.read_csv("suscriptores.csv")
+# except FileNotFoundError:
+#     suscriptores = pd.DataFrame(columns=["email", "fecha"])
+# 
+# nuevo = pd.DataFrame([{"email": email, "fecha": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}])
+# suscriptores = pd.concat([suscriptores, nuevo], ignore_index=True)
+# suscriptores.to_csv("suscriptores.csv", index=False)

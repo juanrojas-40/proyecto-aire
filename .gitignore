@@ -7,3 +7,6 @@
 
 # Entornos virtuales
 venv/
+
+# Google Sheets credentials
+credentials.json

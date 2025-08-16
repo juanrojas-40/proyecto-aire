@@ -44,10 +44,20 @@ def guardar_suscriptor(email):
         st.error(f"❌ Error al guardar suscriptor: {e}")
         return False
     
+import os
 
+# Opcional: Verifica que el archivo existe
+if not os.path.exists("credentials.json"):
+    st.warning("⚠️ Archivo credentials.json no encontrado. Asegúrate de haberlo subido.")
+else:
+    st.write("✅ Credenciales de Google Sheets cargadas")
 
+try:
+    import gspread
+    st.write("✅ gspread instalado correctamente")
+except Exception as e:
+    st.error(f"❌ Error al importar gspread: {e}")
 
-    
 # --- 1. CARGA DE CREDENCIALES SEGURAS ---
 # Cargar .env solo si existe (modo desarrollo)
 if os.path.exists(".env"):

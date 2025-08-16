@@ -58,6 +58,16 @@ try:
 except Exception as e:
     st.error(f"❌ Error al importar gspread: {e}")
 
+
+# Diagnóstico de secretos
+st.sidebar.subheader("🔧 Diagnóstico de secretos")
+try:
+    st.sidebar.write("EMAIL_REMITENTE:", st.secrets["EMAIL_REMITENTE"])
+    st.sidebar.write("EMAIL_APP_PASSWORD:", "✅ Cargado" if st.secrets["EMAIL_APP_PASSWORD"] else "❌ Vacío")
+except Exception as e:
+    st.sidebar.error(f"No se pudieron leer los secretos: {e}")
+
+
 # --- 1. CARGA DE CREDENCIALES SEGURAS ---
 # Cargar .env solo si existe (modo desarrollo)
 if os.path.exists(".env"):

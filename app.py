@@ -1,4 +1,7 @@
 # app.py
+# AirCesfam: Sistema de apoyo a la gestión de recursos humanos
+# en Cesfam La Floresta basado en calidad del aire
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -8,127 +11,174 @@ import folium
 from folium.plugins import MarkerCluster
 from streamlit_folium import st_folium
 import os
-from dotenv import load_dotenv
+import glob
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-
-# --- 6. CONEXIÓN CON GOOGLE SHEETS ---
+from email.mime.base import MIMEBase
+from email import encoders
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from datetime import datetime
+from dotenv import load_dotenv
 
-def guardar_suscriptor(email):
-    """
-    Guarda un nuevo suscriptor en Google Sheets.
-    """
-    try:
-        # Configuración de autenticación
-        scope = [
-            "https://spreadsheets.google.com/feeds",
-            "https://www.googleapis.com/auth/drive"
-        ]
-        creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
-        client = gspread.authorize(creds)
+# --- CONFIGURACIÓN DE LA PÁGINA ---
+st.set_page_config(
+    page_title="AirCesfam - Cesfam La Floresta",
+    page_icon="🏥",
+    layout="wide"
+)
 
-        # Abre la hoja de cálculo por nombre
-        sheet = client.open("suscriptores_airalert").sheet1  # Asegúrate del nombre
+# Título principal
+st.title("🏥 AirCesfam – Cesfam La Floresta")
+st.markdown("""
+**Sistema de apoyo a la gestión de recursos humanos y asignación de turnos,**
+basado en la calidad del aire para optimizar la atención de urgencias en el Cesfam.
+""")
 
-        # Agrega una nueva fila
-        sheet.append_row([
-            email,
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        ])
-        return True
-    except Exception as e:
-        st.error(f"❌ Error al guardar suscriptor: {e}")
-        return False
-    
-import os
-
-# Opcional: Verifica que el archivo existe
-if not os.path.exists("credentials.json"):
-    st.warning("⚠️ Archivo credentials.json no encontrado. Asegúrate de haberlo subido.")
-else:
-    st.write("✅ Credenciales de Google Sheets cargadas")
-
-try:
-    import gspread
-    st.write("✅ gspread instalado correctamente")
-except Exception as e:
-    st.error(f"❌ Error al importar gspread: {e}")
-
-
-# Diagnóstico de secretos
-st.sidebar.subheader("🔧 Diagnóstico de secretos")
-try:
-    st.sidebar.write("EMAIL_REMITENTE:", st.secrets["EMAIL_REMITENTE"])
-    st.sidebar.write("EMAIL_APP_PASSWORD:", "✅ Cargado" if st.secrets["EMAIL_APP_PASSWORD"] else "❌ Vacío")
-except Exception as e:
-    st.sidebar.error(f"No se pudieron leer los secretos: {e}")
-
-
-# --- 1. CARGA DE CREDENCIALES SEGURAS ---
-# Cargar .env solo si existe (modo desarrollo)
+# --- 1. CARGA DE CREDENCIALES ---
+# Cargar .env si existe (modo local)
 if os.path.exists(".env"):
     load_dotenv()
 
-# Función para obtener secretos: primero de Streamlit Cloud, luego de .env
 def get_secret(key):
     try:
         return st.secrets[key]
     except:
         return os.getenv(key)
 
-# Obtener credenciales
 EMAIL_REMITENTE = get_secret("EMAIL_REMITENTE")
 EMAIL_APP_PASSWORD = get_secret("EMAIL_APP_PASSWORD")
 
-# Validar que se cargaron
 if not EMAIL_REMITENTE or not EMAIL_APP_PASSWORD:
-    st.error("❌ Error de configuración: No se encontraron las credenciales. Revisa .env o secrets.toml")
+    st.error("❌ Error: No se encontraron las credenciales de correo. Revisa .env o secrets.toml")
     st.stop()
 
-# --- 2. GENERACIÓN DE DATOS ALEATORIOS ---
-def generar_datos_aleatorios():
-    fechas = pd.date_range(start='2025-08-11 21:00', periods=7, freq='h')
-    data = {
-        'Fecha y hora': fechas,
-        'MP 10': [80, 34, 13, 14, 21, 17, 5],
-        'MP 2,5': [79, 33, 12, 13, 19, 15, 5],
-        'SO2': [12.54, 12.12, 11.74, 11.82, 11.64, 11.93, 11.2],
-        'NO2': [0.52, 0.47, 0.87, 0.87, 0.87, 0.87, 0.87],
-        'CO': [1.42, 1.01, 0.73, 0.74, 0.74, 0.68, 0.51],
-        'O3': [13, 14, 15, 14, 15, 16, 16]
-    }
-    return pd.DataFrame(data)
+# --- 2. CARGA DE DATOS (cacheada) ---
+@st.cache_data
+def cargar_datos_unidos(ruta_carpeta):
+    patron = os.path.join(ruta_carpeta, "*.csv")
+    archivos_csv = glob.glob(patron)
 
-df = generar_datos_aleatorios()
+    if not archivos_csv:
+        st.error("❌ No se encontraron archivos CSV en la carpeta especificada.")
+        return None
 
-# --- 3. FUNCIÓN PARA ENVIAR EMAIL DE BIENVENIDA ---
+    listado_dataframes = []
+    for archivo in archivos_csv:
+        try:
+            df = pd.read_csv(archivo)
+            listado_dataframes.append(df)
+        except Exception as e:
+            st.warning(f"❌ Error al leer {os.path.basename(archivo)}: {e}")
+
+    if not listado_dataframes:
+        st.error("⚠️ No se pudo cargar ningún archivo correctamente.")
+        return None
+
+    df_unido = pd.concat(listado_dataframes, ignore_index=True)
+    return df_unido
+
+# Ruta de datos (ajustar según entorno)
+ruta_carpeta = r"C:\Users\sucor\OneDrive\Escritorio\UDEC_MAGISTER\VI - TRIMESTRE\PROYECTO INTEGRADO\proyecto-aire"
+df = cargar_datos_unidos(ruta_carpeta)
+
+if df is None:
+    st.stop()
+
+# --- 3. LIMPIEZA Y PREPARACIÓN ---
+df['datetimeLocal'] = pd.to_datetime(df['datetimeLocal'], errors='coerce')
+df = df.dropna(subset=['datetimeLocal', 'value', 'parameter', 'location_name'])
+df['value'] = pd.to_numeric(df['value'], errors='coerce')
+df = df.dropna(subset=['value'])
+
+# Filtrar contaminantes clave
+contaminantes_clave = ['pm25', 'pm10', 'o3', 'no2']
+df = df[df['parameter'].isin(contaminantes_clave)]
+
+# Extraer fecha y hora
+df['fecha'] = df['datetimeLocal'].dt.date
+df['hora'] = df['datetimeLocal'].dt.hour
+
+# --- 4. NIVELES DE ALERTA ---
+def nivel_contaminacion(valor, parametro):
+    if parametro == 'pm25':
+        if valor <= 12: return 'Bueno', 'green'
+        elif valor <= 35: return 'Moderado', 'yellow'
+        elif valor <= 55: return 'Dañino S. G.', 'orange'
+        elif valor <= 150: return 'Dañino', 'red'
+        elif valor <= 250: return 'Muy Dañino', 'purple'
+        else: return 'Peligroso', 'maroon'
+    elif parametro == 'pm10':
+        if valor <= 54: return 'Bueno', 'green'
+        elif valor <= 154: return 'Moderado', 'yellow'
+        elif valor <= 254: return 'Dañino S. G.', 'orange'
+        elif valor <= 354: return 'Dañino', 'red'
+        else: return 'Peligroso', 'purple'
+    else:
+        return 'Moderado', 'gray'
+
+df['nivel_alerta'] = df.apply(lambda x: nivel_contaminacion(x['value'], x['parameter']), axis=1)
+df['nivel'] = df['nivel_alerta'].apply(lambda x: x[0])
+df['color'] = df['nivel_alerta'].apply(lambda x: x[1])
+
+# --- 5. ESTIMACIÓN DE DEMANDA EN CESFAM ---
+def estimar_demanda(pm25_value):
+    base_consultas = 35  # promedio diario Cesfam La Floresta (ajustable)
+    if pm25_value <= 12:
+        factor = 1.0
+    elif pm25_value <= 35:
+        factor = 1.3
+    elif pm25_value <= 55:
+        factor = 1.7
+    elif pm25_value <= 150:
+        factor = 2.2
+    else:
+        factor = 2.8
+    return int(base_consultas * factor)
+
+# Últimos valores de PM2.5
+df_pm25 = df[df['parameter'] == 'pm25'].sort_values('datetimeLocal')
+ultimos_pm25 = df_pm25.groupby('location_name').last().reset_index()
+
+# --- 6. CONEXIÓN CON GOOGLE SHEETS (SUSCRIPTORES) ---
+def guardar_suscriptor(email):
+    try:
+        scope = [
+            "https://spreadsheets.google.com/feeds",
+            "https://www.googleapis.com/auth/drive"
+        ]
+        creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
+        client = gspread.authorize(creds)
+        sheet = client.open("suscriptores_aircesfam").sheet1
+        sheet.append_row([email, datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
+        return True
+    except Exception as e:
+        st.error(f"❌ Error al guardar suscriptor: {e}")
+        return False
+
 def enviar_email_bienvenida(destinatario):
     remitente = EMAIL_REMITENTE
     password = EMAIL_APP_PASSWORD
 
     mensaje = MIMEMultipart("alternative")
-    mensaje["Subject"] = "¡Bienvenido al Reporte de Calidad del Aire! 🌿"
+    mensaje["Subject"] = "✅ Bienvenido al Sistema AirCesfam – Cesfam La Floresta"
     mensaje["From"] = remitente
     mensaje["To"] = destinatario
 
     cuerpo_html = f"""
     <html>
-    <body style="font-family: Arial, sans-serif; color: #333;">
-        <h2>¡Hola! Gracias por suscribirte a <strong>AirAlert Chile</strong> 🌬️</h2>
-        <p>Recibirás reportes diarios sobre la calidad del aire en tu ciudad, con recomendaciones para proteger tu salud.</p>
-        <p>Esto incluye:</p>
+    <body style="font-family: Arial, sans-serif; color: #333; line-height: 1.6;">
+        <h2>¡Hola! Gracias por suscribirte a <strong>AirCesfam</strong> 🌬️</h2>
+        <p>Este sistema te mantendrá informado sobre:</p>
         <ul>
-            <li>🔍 Niveles de PM2.5, PM10, O₃ y otros contaminantes</li>
-            <li>📊 Recomendaciones personalizadas según la calidad del aire</li>
-            <li>📍 Alertas para tu ciudad</li>
+            <li>📊 Niveles de PM2.5, PM10 y otros contaminantes en tu zona</li>
+            <li>⚠️ Alertas tempranas de alta demanda en urgencias</li>
+            <li>👥 Recomendaciones de asignación de personal por turno</li>
+            <li>📥 Reportes semanales para gestión del Cesfam La Floresta</li>
         </ul>
+        <p>Este sistema apoya la toma de decisiones en la gestión de recursos humanos para mejorar la resolutividad y seguridad del paciente.</p>
         <p>Saludos,<br>
-        <strong>Equipo AirAlert</strong><br>
-        <em>Preferencia Report - Calidad del Aire en Chile</em></p>
+        <strong>Equipo de Gestión - Cesfam La Floresta</strong></p>
         <hr>
         <p><small>¿No solicitaste esto? Puedes ignorar este correo.</small></p>
     </body>
@@ -148,38 +198,126 @@ def enviar_email_bienvenida(destinatario):
         st.error(f"❌ Error al enviar correo: {e}")
         return False
 
-# --- 4. INTERFAZ DE USUARIO ---
-tab1, tab2, tab3 = st.tabs(["📊 Datos", "📈 Gráficos", "🌍 Mapa"])
+# --- 7. INTERFAZ DE USUARIO ---
+tab1, tab2, tab3, tab4 = st.tabs([
+    "📊 Resumen Ejecutivo", 
+    "📈 Tendencias", 
+    "🌍 Mapa de Alerta", 
+    "📋 Gestión de Turnos"
+])
 
+# --- TAB 1: RESUMEN ---
 with tab1:
-    st.subheader("Datos de Calidad del Aire (Simulados)")
-    st.dataframe(df)
+    st.subheader("📈 Resumen de Calidad del Aire y Demanda Esperada")
 
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Estaciones", len(ultimos_pm25))
+    with col2:
+        prom_pm25 = ultimos_pm25['value'].mean()
+        st.metric("PM2.5 Promedio", f"{prom_pm25:.1f} µg/m³")
+    with col3:
+        demanda_media = int(ultimos_pm25['value'].apply(estimar_demanda).mean())
+        st.metric("Consultas Esperadas", f"{demanda_media}/día")
+
+    st.markdown("### 🔔 Alertas Activas")
+    alertas = ultimos_pm25[ultimos_pm25['nivel'].isin(['Dañino', 'Muy Dañino', 'Peligroso'])]
+    if not alertas.empty:
+        for _, row in alertas.iterrows():
+            st.error(f"🚨 {row['location_name']}: {row['value']:.1f} µg/m³ – {row['nivel']}")
+    else:
+        st.success("✅ No hay alertas activas.")
+
+# --- TAB 2: TENDENCIAS ---
 with tab2:
-    st.subheader("Tendencias de Contaminantes")
-    df_long = pd.melt(df, id_vars=['Fecha y hora'], var_name='Contaminante', value_name='Valor')
-    fig = px.line(df_long, x='Fecha y hora', y='Valor', color='Contaminante', title="Evolución de Contaminantes")
+    st.subheader("Evolución de Contaminantes")
+    estaciones = df['location_name'].unique()
+    estacion_sel = st.selectbox("Seleccionar estación", estaciones, key="tendencia")
+    df_filtrado = df[df['location_name'] == estacion_sel]
+    fig = px.line(df_filtrado, x='datetimeLocal', y='value', color='parameter',
+                  title=f"Contaminantes en {estacion_sel}",
+                  labels={'value': 'Concentración (µg/m³)', 'datetimeLocal': 'Fecha y Hora'})
     st.plotly_chart(fig, use_container_width=True)
 
+# --- TAB 3: MAPA ---
 with tab3:
-    st.subheader("📍 Mapa de Calidad del Aire (Simulado)")
-    ubicaciones = {
-        'Santiago': [-33.45694, -70.66927],
-        'Temuco': [-38.9333, -72.6500],
-        'Concepción': [-36.8187, -73.0573],
-        'Valparaíso': [-33.0493, -71.5442]
-    }
-    estacion = st.selectbox("Seleccionar Estación", list(ubicaciones.keys()))
-    lat, lon = ubicaciones[estacion]
-
-    m = folium.Map(location=[lat, lon], zoom_start=12)
+    st.subheader("📍 Mapa de Monitoreo")
+    lat_mean = df['latitude'].mean()
+    lon_mean = df['longitude'].mean()
+    m = folium.Map(location=[lat_mean, lon_mean], zoom_start=8)
     marker_cluster = MarkerCluster().add_to(m)
-    folium.Marker(location=[lat, lon], popup=estacion, tooltip=estacion).add_to(marker_cluster)
+
+    for _, row in ultimos_pm25.iterrows():
+        color_map = {'green': 'green', 'yellow': 'beige', 'orange': 'orange', 'red': 'red', 'purple': 'purple', 'maroon': 'darkred'}
+        folium.Marker(
+            location=[row['latitude'], row['longitude']],
+            popup=f"<b>{row['location_name']}</b><br>PM2.5: {row['value']:.1f} µg/m³<br>Nivel: {row['nivel']}<br>Consultas esperadas: {estimar_demanda(row['value'])}",
+            icon=folium.Icon(color=color_map.get(row['color'], 'gray'))
+        ).add_to(marker_cluster)
+
     st_folium(m, width=800, height=600)
 
-# --- 5. SISTEMA DE SUSCRIPCIÓN ---
-st.sidebar.markdown("---")
-st.sidebar.subheader("📬 Suscríbete al Reporte Diario")
+# --- TAB 4: GESTIÓN DE TURNOS ---
+with tab4:
+    st.subheader("📋 Recomendación de Asignación de Personal – Turno")
+
+    turno = st.selectbox("Turno", ["Mañana (8-16)", "Tarde (16-24)", "Noche (0-8)"])
+    
+    # Simulación: seleccionar estación más cercana al Cesfam
+    ubicacion_cesfam = ultimos_pm25.iloc[0]  # Ajustar por filtro real si se conoce
+    pm25_actual = ubicacion_cesfam['value']
+    nivel = ubicacion_cesfam['nivel']
+    consultas_esperadas = estimar_demanda(pm25_actual)
+
+    dotacion_base = 5  # médico, enfermera, técnico, administrativo, aseo
+    if pm25_actual <= 12:
+        adicional = 0
+        recomendacion = "Dotación base suficiente."
+    elif pm25_actual <= 35:
+        adicional = 1
+        recomendacion = "Agregar 1 profesional (preferentemente enfermería o técnico paramédico)."
+    elif pm25_actual <= 55:
+        adicional = 2
+        recomendacion = "Asignar 2 adicionales. Revisar insumos respiratorios."
+    else:
+        adicional = 3
+        recomendacion = "Activar plan de contingencia: 3 adicionales, revisar oxígeno y medicamentos."
+
+    total = dotacion_base + adicional
+
+    st.info(f"""
+    **Nivel de Alerta:** {nivel}  
+    **PM2.5:** {pm25_actual:.1f} µg/m³  
+    **Consultas esperadas:** ~{consultas_esperadas}  
+    **Recomendación de dotación:**  
+    - **Total sugerido:** {total} profesionales ({adicional} adicionales)  
+    - {recomendacion}
+    """)
+
+    # Descargar recomendación
+    reporte = pd.DataFrame([{
+        'Establecimiento': 'Cesfam La Floresta',
+        'Turno': turno,
+        'PM2.5': pm25_actual,
+        'Nivel': nivel,
+        'Consultas Esperadas': consultas_esperadas,
+        'Dotacion Base': dotacion_base,
+        'Adicional': adicional,
+        'Total Recomendado': total,
+        'Fecha': datetime.now().strftime("%Y-%m-%d %H:%M")
+    }])
+    csv = reporte.to_csv(index=False).encode('utf-8')
+
+    st.download_button(
+        label="📥 Descargar recomendación (CSV)",
+        data=csv,
+        file_name=f"recomendacion_cesfam_{turno}_{datetime.now().strftime('%H%M')}.csv",
+        mime="text/csv"
+    )
+
+# --- SIDEBAR: SUSCRIPCIÓN POR CORREO ---
+st.sidebar.header("📬 Suscríbete a AirCesfam")
+st.sidebar.markdown("Recibe alertas semanales y recomendaciones de gestión.")
 
 with st.sidebar.form(key="form_suscripcion"):
     email = st.text_input("Correo electrónico", placeholder="tu@correo.cl")
@@ -187,39 +325,20 @@ with st.sidebar.form(key="form_suscripcion"):
 
 if submit:
     if not email or "@" not in email or "." not in email:
-        st.sidebar.error("Por favor, ingresa un correo válido.")
+        st.sidebar.error("📧 Por favor, ingresa un correo válido.")
     else:
-        # 1. Envía correo de bienvenida
         exito_correo = enviar_email_bienvenida(email)
-        
-        # 2. Guarda en Google Sheets
         exito_guardado = guardar_suscriptor(email)
         
-        # 3. Muestra mensaje
         if exito_guardado:
             if exito_correo:
-                st.sidebar.success(f"✅ ¡Gracias, {email}! Revisa tu correo.")
+                st.sidebar.success(f"✅ ¡Gracias, {email}! Revisa tu bandeja de entrada.")
             else:
-                st.sidebar.warning(f"✅ Suscrito. Revisa tu correo pronto.")
+                st.sidebar.warning(f"✅ Suscrito. Pronto recibirás información.")
         else:
-            st.sidebar.error("Hubo un problema al guardar tu suscripción.")
+            st.sidebar.error("Hubo un problema al registrar tu suscripción.")
 
-
-
-
-
-
-
-
-# --- 6. GUARDAR SUSCRIPTORES (opcional - solo para desarrollo local) ---
-# ⚠️ En Streamlit Cloud, los archivos se borran al reiniciar
-# Para producción, usa Google Sheets, base de datos o API externa
-# Ejemplo comentado:
-# try:
-#     suscriptores = pd.read_csv("suscriptores.csv")
-# except FileNotFoundError:
-#     suscriptores = pd.DataFrame(columns=["email", "fecha"])
-# 
-# nuevo = pd.DataFrame([{"email": email, "fecha": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}])
-# suscriptores = pd.concat([suscriptores, nuevo], ignore_index=True)
-# suscriptores.to_csv("suscriptores.csv", index=False)
+# --- PIE DE PÁGINA ---
+st.sidebar.markdown("---")
+st.sidebar.write(f"📅 Actualizado: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+st.sidebar.caption("Sistema desarrollado para el Cesfam La Floresta – Gestión 2025")
